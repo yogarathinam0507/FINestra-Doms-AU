@@ -99,33 +99,37 @@ def enter_stage(n, prev, start):
     audit("system", "stage", f"{prev} -> {n}")
 
 def apply_news_impact_now(nid):
-    """Robust News Impact Engine: Handles numeric/string directions and applies immediate price/chart updates."""
+    """CRITICAL FIX: Apply news impact immediately using symbols, sens, impacts, and direction."""
     news = C.execute("SELECT * FROM news WHERE id=?", (nid,)).fetchone()
     if not news: return
     upd = int(D.get(C, "upd") or 0)
     
     try:
-        impacts = json.loads(news["impacts"] or "{}")
-    except Exception:
-        impacts = {}
-
-    try:
         sens = json.loads(news["sens"] or "{}")
     except Exception:
         sens = {}
 
-    with D.tx(C):
-        target_symbol = news["symbol"] if "symbol" in news.keys() and news["symbol"] else None
-        target_industry = news["industry"] if "industry" in news.keys() and news["industry"] else None
-        is_mega = news["kind"] in ("mega", "shock") or "All Sectors" in str(target_industry or "") or "ALL" in impacts
+    try:
+        impacts = json.loads(news["impacts"] or "{}") if "impacts" in news.keys() and news["impacts"] else {}
+    except Exception:
+        impacts = {}
 
+    raw_syms = str(news["symbols"] if "symbols" in news.keys() and news["symbols"] else "")
+    target_symbols = [s.strip() for s in raw_syms.split(",") if s.strip()]
+    
+    raw_ind = str(news["industry"] if "industry" in news.keys() and news["industry"] else "")
+    target_industries = [i.strip() for i in raw_ind.split(",") if i.strip()]
+
+    is_mega = news["kind"] in ("mega", "shock") or "Entire" in raw_ind or "All Sectors" in raw_ind or "ALL" in impacts
+
+    with D.tx(C):
         companies = C.execute("SELECT symbol, price, industry FROM companies").fetchall()
         for co in companies:
             sym = co["symbol"]
             old_price = co["price"]
             pct = 0.0
 
-            # 1. Direct symbol mapping or sentiment
+            # 1. Direct symbol sensitivity or impact mapping from seed data
             if sym in sens:
                 pct = float(sens[sym])
             elif sym in impacts:
@@ -135,28 +139,25 @@ def apply_news_impact_now(nid):
                 multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
                 base_impact = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else 5.0)
                 pct = multiplier * (base_impact / 100.0)
-            else:
-                # 2. Industry or target matching
-                n_industries = [i.strip() for i in str(target_industry or "").split(",") if i.strip()]
-                if (target_symbol and sym == target_symbol) or (n_industries and co["industry"] in n_industries) or not target_symbol and not target_industry:
-                    dir_val = news["direction"] if "direction" in news.keys() else 1
-                    multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
-                    sev = float(news["severity"] if "severity" in news.keys() and news["severity"] is not None else 2.0)
-                    impact_val = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else (sev * 1.5))
-                    pct = multiplier * (impact_val / 100.0)
+            elif sym in target_symbols or any(ind.lower() in co["industry"].lower() for ind in target_industries) or not target_symbols:
+                dir_val = news["direction"] if "direction" in news.keys() else 1
+                multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
+                sev = float(news["severity"] if "severity" in news.keys() and news["severity"] is not None else 2.0)
+                impact_val = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else (sev * 1.0))
+                pct = multiplier * (impact_val / 100.0)
 
             if abs(pct) < 1e-6:
                 continue
 
-            # Bounded safety limits (-30% to +50% max single news spike)
+            # Bounded safety limits (-30% to +50%)
             pct = max(-0.30, min(0.50, float(pct)))
             new_price = round(max(1.0, old_price * (1.0 + pct)), 2)
 
-            # Update company price
+            # Update company price immediately
             C.execute("UPDATE companies SET price=?, prev_price=?, trend=? WHERE symbol=?", 
                       (new_price, old_price, "Bullish" if pct > 0 else "Bearish", sym))
 
-            # Update or insert candlestick price history
+            # Update candlestick price history
             hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
             if hist:
                 high_val = max(hist["h"], new_price)
@@ -167,6 +168,7 @@ def apply_news_impact_now(nid):
                 base_o = last_h["c"] if last_h else old_price
                 C.execute("INSERT INTO price_history(symbol, upd, o, h, l, c, v) VALUES(?,?,?,?,?,?,0)", 
                           (sym, upd, base_o, max(base_o, new_price), min(base_o, new_price), new_price))
+                
 def market_tick(name, el, start, rel):
     tick, itick, ia, total = mcfg(name); upd = int(D.get(C, "upd")); ch = False
     
