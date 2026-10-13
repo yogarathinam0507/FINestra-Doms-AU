@@ -29,7 +29,7 @@ def analysis(closes):
                 trend="Bullish" if s5 >= s20 else "Bearish", tech=max(0, min(100, int(score))))
 
 def apply_news_shock(c, news_id):
-    """CRITICAL FIX: Immediately calculates and applies news/event price shocks (manual, automatic, or mega events)
+    """Immediately calculates and applies news/event price shocks (manual, automatic, or mega events)
        at the exact second they trigger, updating company valuations and real-time candles instantly.
     """
     n = c.execute("SELECT * FROM news WHERE id=?", (news_id,)).fetchone()
@@ -47,8 +47,6 @@ def apply_news_shock(c, news_id):
 
     upd = int(D.get(c, "upd") or 0)
     cos = c.execute("SELECT * FROM companies").fetchall()
-    
-    # Check if mega event or broad market event
     is_mega = n.get("kind") in ("mega", "shock") or "All Sectors" in str(n.get("industry", "")) or "ALL" in impacts
 
     with D.tx(c):
@@ -57,7 +55,6 @@ def apply_news_shock(c, news_id):
             old_price = co["price"]
             pct = 0.0
 
-            # 1. Check direct symbol sentiment or impact mapping
             if sym in sens:
                 pct = float(sens[sym])
             elif sym in impacts:
@@ -67,7 +64,6 @@ def apply_news_shock(c, news_id):
                 base_impact = float(n.get("impact", 5.0) or 5.0)
                 pct = direction * (base_impact / 100.0)
             else:
-                # 2. Check industry mapping
                 raw_ind = str(n.get("industry", ""))
                 n_industries = [i.strip() for i in raw_ind.split(",") if i.strip()]
                 if co["industry"] in n_industries or not n_industries:
@@ -78,15 +74,12 @@ def apply_news_shock(c, news_id):
             if abs(pct) < 1e-6:
                 continue
 
-            # Bounded immediate price shock (-50% to +100%)
             pct = max(-0.50, min(1.00, float(pct)))
             new_price = max(1.0, round(old_price * (1.0 + pct), 2))
 
-            # Update company valuation
             c.execute("UPDATE companies SET prev_price=?, price=?, trend=? WHERE symbol=?",
                       (old_price, new_price, "Bullish" if pct > 0 else "Bearish", sym))
 
-            # Update current live candlestick (OHLC) in real-time
             candle = c.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
             if candle:
                 new_h = max(candle["h"], new_price)
@@ -97,16 +90,15 @@ def apply_news_shock(c, news_id):
                 c.execute("INSERT INTO price_history(symbol,upd,o,h,l,c,v) VALUES(?,?,?,?,?,?,?)",
                           (sym, upd, old_price, max(old_price, new_price), min(old_price, new_price), new_price, 0))
 
-            # Audit trail
             c.execute("INSERT INTO audit(ts,actor,action,detail) VALUES(?,?,?,?)",
                       (time.time(), "news_shock_engine", "immediate_price_shock",
                        json.dumps(dict(news_id=news_id, symbol=sym, price_before=old_price, price_after=new_price, impact_pct=pct * 100))))
 
 def step(c, upd, cap=0.06, factor=1.0):
-    """Executes one official market update tick (every 45 seconds). 
-       Combines normalized, bounded components:
+    """Executes one official market update tick (every 30 seconds). 
+       Combines normalized, bounded components (50/30/20 model):
        - 50% Fundamentals and Technical indicators
-       - 30% Actual team buying/selling order-flow pressure
+       - 30% Actual team buying/selling pressure (Order Flow)
        - 20% Geometric Brownian Motion (GBM)
     """
     rnd = random.Random(1000 + upd)
@@ -138,11 +130,11 @@ def step(c, upd, cap=0.06, factor=1.0):
         fund_score = float(co["fund"] or 50.0)
         tech_score = float(a["tech"] or 50.0)
         fund_tech_combined = (0.6 * fund_score) + (0.4 * tech_score) # 0 to 100 scale
-        fund_tech_return = (fund_tech_combined - 50.0) / 500.0  # Normalized bounded return (-0.10 to +0.10)
+        fund_tech_return = max(-0.05, min(0.05, (fund_tech_combined - 50.0) / 500.0)) # Normalized & bounded (-5% to +5%)
         
         # Component 2: Team Order Flow Pressure (30% weight)
         net_flow = orders_pressure.get(sym, 0.0)
-        flow_return = max(-0.05, min(0.05, net_flow / 50000.0)) # Normalized bounded return
+        flow_return = max(-0.05, min(0.05, net_flow / 50000.0)) # Normalized & bounded (-5% to +5%)
         
         # Component 3: Geometric Brownian Motion (GBM) (20% weight)
         beta = float(co["beta"] or 1.0)
@@ -151,9 +143,9 @@ def step(c, upd, cap=0.06, factor=1.0):
         dt = 1.0
         z = rnd.gauss(0, 1)
         gbm_return = (mu - 0.5 * (sigma ** 2)) * dt + sigma * math.sqrt(dt) * z
-        gbm_return = max(-0.08, min(0.08, gbm_return))
+        gbm_return = max(-0.05, min(0.05, gbm_return)) # Normalized & bounded (-5% to +5%)
         
-        # Weighted combination (50% Fund/Tech, 30% Order Flow, 20% GBM)
+        # Weighted combination: 50% Fund/Tech + 30% Order Flow + 20% GBM
         combined_return = (0.50 * fund_tech_return) + (0.30 * flow_return) + (0.20 * gbm_return)
         
         # Add active news impact if any
