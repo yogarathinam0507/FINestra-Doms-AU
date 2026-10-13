@@ -442,22 +442,29 @@ async def event(action: str, req: Request):
             C.execute("UPDATE r2_companies SET value=start_value")
             for k, v in dict(status="idle", elapsed="0", run_since="0", upd="0", elapsed_now="0", stage_cur="idle", r1_results="", r2_round="0", r2_final="", final5_on="0", hold_at="").items(): D.put(C, k, v)
         R2.gen_news(C)
-    elif action == "release":
+   elif action == "release":
         nid = b.get("id") or b.get("news_id") or b.get("newsId")
         if not nid:
             row = C.execute("SELECT id FROM news WHERE released=0 ORDER BY id LIMIT 1").fetchone()
             if row: nid = row["id"]
         if not nid: raise HTTPException(400, "News ID is required")
-        C.execute("UPDATE news SET released=1,released_upd=? WHERE id=? AND released=0", (int(D.get(C, "upd")), nid))
-        M.apply_news_shock(C, nid)
-        apply_news_impact_now(nid)
+        
+        # Mark news as released in database
+        C.execute("UPDATE news SET released=1, released_upd=? WHERE id=? AND released=0", (int(D.get(C, "upd") or 0), nid))
+        
+        # Apply the official shock calculation from market_engine
+        try:
+            M.apply_news_shock(C, nid)
+        except Exception as e:
+            print("news shock error:", repr(e))
+            
         R2.SOUNDS.append("alert")
-        # INSTANT BROADCAST PUSH TO ELIMINATE 45S / MULTI-CYCLE DELAYS
-        await push("update", {"stocks": stocks()})
+        
+        # Force immediate broadcast to all connected clients
+        await push("update")
+        
         audit(s["ref"], f"event_{action}", json.dumps(b))
         return state()
-    else: raise HTTPException(400, f"Cannot {action} while {stt}")
-    audit(s["ref"], f"event_{action}", json.dumps(b)); await push("restart" if action == "restart" else "update"); return state()
 
 # ---------- Round 2 ----------
 def r2_ctx(need_auction=True):
