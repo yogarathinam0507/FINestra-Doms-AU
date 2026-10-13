@@ -20,14 +20,17 @@ def clock(c=C):
 
 def audit(actor, action, detail=""): C.execute("INSERT INTO audit(ts,actor,action,detail) VALUES(?,?,?,?)", (time.time(), actor, action, detail))
 
-async def broadcast(kind="update", sounds=None):
-    msg = json.dumps({"type": kind, "upd": int(D.get(C, "upd")), "stage": D.get(C, "stage_cur"), "sounds": sounds or []})
+async def broadcast(kind="update", sounds=None, extra_data=None):
+    payload = {"type": kind, "upd": int(D.get(C, "upd")), "stage": D.get(C, "stage_cur"), "sounds": sounds or []}
+    if extra_data:
+        payload.update(extra_data)
+    msg = json.dumps(payload)
     for ws in list(clients):
         try: await ws.send_text(msg)
         except Exception: clients.discard(ws)
 
-async def push(kind="update"):
-    snd = R2.SOUNDS[:]; R2.SOUNDS.clear(); await broadcast(kind, snd)
+async def push(kind="update", extra_data=None):
+    snd = R2.SOUNDS[:]; R2.SOUNDS.clear(); await broadcast(kind, snd, extra_data)
 
 def need(req: Request, *roles):
     s = auth.who(C, req.headers.get("x-token"))
@@ -96,13 +99,12 @@ def enter_stage(n, prev, start):
     audit("system", "stage", f"{prev} -> {n}")
 
 def apply_news_impact_now(nid):
-    """CRITICAL FIX: Apply news impact immediately and update price history / active candlestick instantly."""
+    """Apply news impact immediately and update price history / active candlestick instantly."""
     news = C.execute("SELECT * FROM news WHERE id=?", (nid,)).fetchone()
     if not news: return
     upd = int(D.get(C, "upd"))
     
     with D.tx(C):
-        # Determine affected symbols based on news target fields (if applicable) or market-wide/industry
         target_symbol = news["symbol"] if "symbol" in news.keys() and news["symbol"] else None
         target_industry = news["industry"] if "industry" in news.keys() and news["industry"] else None
         
@@ -111,7 +113,7 @@ def apply_news_impact_now(nid):
             sym = co["symbol"]
             is_affected = False
             if not target_symbol and not target_industry:
-                is_affected = True # Market-wide or general news
+                is_affected = True
             elif target_symbol and sym == target_symbol:
                 is_affected = True
             elif target_industry:
@@ -121,21 +123,18 @@ def apply_news_impact_now(nid):
             
             if is_affected:
                 old_price = co["price"]
-                # Calculate signed impact percentage using severity & sentiment/direction
                 sev = float(news["severity"] if "severity" in news.keys() and news["severity"] else 2)
                 sens = float(news["sens"] if "sens" in news.keys() and news["sens"] else 1.0)
                 direction = news["direction"] if "direction" in news.keys() else "bullish"
                 multiplier = 1.0 if direction in ("bullish", "positive", "UP") else (-1.0 if direction in ("bearish", "negative", "DOWN") else 0.0)
                 
                 pct_change = multiplier * (sev * 0.01) * sens
-                pct_change = max(-0.20, min(0.20, pct_change)) # Bounded safely to max ±20%
+                pct_change = max(-0.20, min(0.20, pct_change))
                 
                 new_price = round(max(1.0, old_price * (1.0 + pct_change)), 2)
                 
-                # Update company price immediately
                 C.execute("UPDATE companies SET price=?, prev_price=? WHERE symbol=?", (new_price, old_price, sym))
                 
-                # Update or insert into current price_history candlestick for this update step
                 hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
                 if hist:
                     high_val = max(hist["h"], new_price)
@@ -155,7 +154,7 @@ def market_tick(name, el, start, rel):
         if n["kind"] in ("shock", "mega"): R2.SOUNDS.append("alert")
         try:
             M.apply_news_shock(C, n["id"])
-            apply_news_impact_now(n["id"]) # Immediate price & chart sync
+            apply_news_impact_now(n["id"])
         except Exception as e:
             print("news shock error:", repr(e))
 
@@ -428,8 +427,12 @@ async def event(action: str, req: Request):
         if not nid: raise HTTPException(400, "News ID is required")
         C.execute("UPDATE news SET released=1,released_upd=? WHERE id=? AND released=0", (int(D.get(C, "upd")), nid))
         M.apply_news_shock(C, nid)
-        apply_news_impact_now(nid) # CRITICAL: Immediate manual news release price & chart update
+        apply_news_impact_now(nid)
         R2.SOUNDS.append("alert")
+        # INSTANT BROADCAST PUSH TO ELIMINATE 45S / MULTI-CYCLE DELAYS
+        await push("update", {"stocks": stocks()})
+        audit(s["ref"], f"event_{action}", json.dumps(b))
+        return state()
     else: raise HTTPException(400, f"Cannot {action} while {stt}")
     audit(s["ref"], f"event_{action}", json.dumps(b)); await push("restart" if action == "restart" else "update"); return state()
 
