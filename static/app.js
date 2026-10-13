@@ -81,14 +81,17 @@ function connect(){
     ws = new WebSocket((location.protocol=='https:'?'wss://':'ws://')+location.host+'/ws');
     ws.onmessage = m => {
         const d = JSON.parse(m.data);
-        if(d.type=='restart') toast('Event restarted');
+        if (d.type == 'restart') toast('Event restarted');
         
-        // Refresh state and UI
+        // Clear lastSig cache so refresh() is guaranteed to re-render
+        lastSig = ''; 
+        
+        // Refresh state and UI immediately
         refresh();
         
-        // If a stock chart is currently open, sync it immediately with the latest server candles & prices
+        // Force live candlestick chart to sync instantly with new prices
         if (typeof CH !== 'undefined' && CH.sym && typeof chartSync === 'function') {
-            chartSync(false); // incremental sync or full refresh
+            chartSync(true);
         }
     };
     ws.onclose = () => setTimeout(connect, 1500);
