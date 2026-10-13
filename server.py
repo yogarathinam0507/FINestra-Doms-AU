@@ -99,53 +99,74 @@ def enter_stage(n, prev, start):
     audit("system", "stage", f"{prev} -> {n}")
 
 def apply_news_impact_now(nid):
-    """Apply news impact immediately and update price history / active candlestick instantly."""
+    """Robust News Impact Engine: Handles numeric/string directions and applies immediate price/chart updates."""
     news = C.execute("SELECT * FROM news WHERE id=?", (nid,)).fetchone()
     if not news: return
-    upd = int(D.get(C, "upd"))
+    upd = int(D.get(C, "upd") or 0)
     
+    try:
+        impacts = json.loads(news["impacts"] or "{}")
+    except Exception:
+        impacts = {}
+
+    try:
+        sens = json.loads(news["sens"] or "{}")
+    except Exception:
+        sens = {}
+
     with D.tx(C):
         target_symbol = news["symbol"] if "symbol" in news.keys() and news["symbol"] else None
         target_industry = news["industry"] if "industry" in news.keys() and news["industry"] else None
-        
-        companies = C.execute("SELECT symbol, price FROM companies").fetchall()
+        is_mega = news["kind"] in ("mega", "shock") or "All Sectors" in str(target_industry or "") or "ALL" in impacts
+
+        companies = C.execute("SELECT symbol, price, industry FROM companies").fetchall()
         for co in companies:
             sym = co["symbol"]
-            is_affected = False
-            if not target_symbol and not target_industry:
-                is_affected = True
-            elif target_symbol and sym == target_symbol:
-                is_affected = True
-            elif target_industry:
-                ind = C.execute("SELECT industry FROM companies WHERE symbol=?", (sym,)).fetchone()
-                if ind and ind["industry"] == target_industry:
-                    is_affected = True
-            
-            if is_affected:
-                old_price = co["price"]
-                sev = float(news["severity"] if "severity" in news.keys() and news["severity"] else 2)
-                sens = float(news["sens"] if "sens" in news.keys() and news["sens"] else 1.0)
-                direction = news["direction"] if "direction" in news.keys() else "bullish"
-                multiplier = 1.0 if direction in ("bullish", "positive", "UP") else (-1.0 if direction in ("bearish", "negative", "DOWN") else 0.0)
-                
-                pct_change = multiplier * (sev * 0.01) * sens
-                pct_change = max(-0.20, min(0.20, pct_change))
-                
-                new_price = round(max(1.0, old_price * (1.0 + pct_change)), 2)
-                
-                C.execute("UPDATE companies SET price=?, prev_price=? WHERE symbol=?", (new_price, old_price, sym))
-                
-                hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
-                if hist:
-                    high_val = max(hist["h"], new_price)
-                    low_val = min(hist["l"], new_price)
-                    C.execute("UPDATE price_history SET h=?, l=?, c=? WHERE symbol=? AND upd=?", (high_val, low_val, new_price, sym, upd))
-                else:
-                    last_h = C.execute("SELECT c FROM price_history WHERE symbol=? ORDER BY upd DESC LIMIT 1", (sym,)).fetchone()
-                    base_o = last_h["c"] if last_h else old_price
-                    C.execute("INSERT INTO price_history(symbol, upd, o, h, l, c, v) VALUES(?,?,?,?,?,?,0)", 
-                              (sym, upd, base_o, max(base_o, new_price), min(base_o, new_price), new_price))
+            old_price = co["price"]
+            pct = 0.0
 
+            # 1. Direct symbol mapping or sentiment
+            if sym in sens:
+                pct = float(sens[sym])
+            elif sym in impacts:
+                pct = float(impacts[sym])
+            elif is_mega:
+                dir_val = news["direction"] if "direction" in news.keys() else 1
+                multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
+                base_impact = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else 5.0)
+                pct = multiplier * (base_impact / 100.0)
+            else:
+                # 2. Industry or target matching
+                n_industries = [i.strip() for i in str(target_industry or "").split(",") if i.strip()]
+                if (target_symbol and sym == target_symbol) or (n_industries and co["industry"] in n_industries) or not target_symbol and not target_industry:
+                    dir_val = news["direction"] if "direction" in news.keys() else 1
+                    multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
+                    sev = float(news["severity"] if "severity" in news.keys() and news["severity"] is not None else 2.0)
+                    impact_val = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else (sev * 1.5))
+                    pct = multiplier * (impact_val / 100.0)
+
+            if abs(pct) < 1e-6:
+                continue
+
+            # Bounded safety limits (-30% to +50% max single news spike)
+            pct = max(-0.30, min(0.50, float(pct)))
+            new_price = round(max(1.0, old_price * (1.0 + pct)), 2)
+
+            # Update company price
+            C.execute("UPDATE companies SET price=?, prev_price=?, trend=? WHERE symbol=?", 
+                      (new_price, old_price, "Bullish" if pct > 0 else "Bearish", sym))
+
+            # Update or insert candlestick price history
+            hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
+            if hist:
+                high_val = max(hist["h"], new_price)
+                low_val = min(hist["l"], new_price)
+                C.execute("UPDATE price_history SET h=?, l=?, c=? WHERE symbol=? AND upd=?", (high_val, low_val, new_price, sym, upd))
+            else:
+                last_h = C.execute("SELECT c FROM price_history WHERE symbol=? ORDER BY upd DESC LIMIT 1", (sym,)).fetchone()
+                base_o = last_h["c"] if last_h else old_price
+                C.execute("INSERT INTO price_history(symbol, upd, o, h, l, c, v) VALUES(?,?,?,?,?,?,0)", 
+                          (sym, upd, base_o, max(base_o, new_price), min(base_o, new_price), new_price))
 def market_tick(name, el, start, rel):
     tick, itick, ia, total = mcfg(name); upd = int(D.get(C, "upd")); ch = False
     
