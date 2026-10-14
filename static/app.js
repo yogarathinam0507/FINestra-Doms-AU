@@ -123,7 +123,6 @@ function stockTable(click){
     return `<table><tr><th>Symbol</th><th class="l">Company</th><th>Price</th><th>Chg</th><th>Chg %</th><th>Vol</th><th>Avail</th>${click?'<th></th>':''}</tr>${(S.stocks||[]).map(x=>{const c=x.price-x.prev_price,p=c/x.prev_price*100;return `<tr class="clk" onclick="openStock('${x.symbol}')"><td><b>${x.symbol}</b></td><td class="l">${esc(x.name)}<br><small style="color:var(--mut)">${esc(x.industry)}</small></td><td>₹${fmt(x.price)}</td><td class="${cls(c)}">${c.toFixed(2)}</td><td class="${cls(c)}">${p.toFixed(2)}\%</td><td>${x.volume}</td><td>${x.inventory}</td>${click?`<td><button class="s" onclick="event.stopPropagation();pick('${x.symbol}')">Trade</button></td>`:''}</tr>`}).join('')}</table>`;
 }
 
-// Organizer specific market table with manual override button
 function orgStockTable(){
     return `<table><tr><th>Symbol</th><th class="l">Company</th><th>Price</th><th>Chg %</th><th>Action</th></tr>${(S.stocks||[]).map(x=>{const c=x.price-x.prev_price,p=c/x.prev_price*100;return `<tr><td><b>${x.symbol}</b></td><td class="l">${esc(x.name)}</td><td>₹${fmt(x.price)}</td><td class="${cls(c)}">${p.toFixed(2)}%</td><td><button class="g" onclick="overridePrice('${x.symbol}',${x.price})">Change Price</button></td></tr>`}).join('')}</table>`;
 }
@@ -241,4 +240,61 @@ function resultsView(){const r2=(RES?.r2||[]).slice(0,5);
 const SETS=[['brk_normal','Brokerage % (Round 1)'],['capital','Round 1 capital ₹'],['time_scale','Time scale (1 = real, 20 = rehearsal)'],['spectator_code','Spectator code'],['reg_code','Team registration code (blank = none)'],['test_sec','Test round (sec)'],['r1_sec','Round 1 (sec)'],['tick_sec','Round 1 update interval – first 30 min (sec)'],['final_tick','Final-phase update interval (sec)'],['r2_teams','Teams in Round 2 (top N from Round 1)'],['r2_cash','Round 2 capital ₹'],['lots_per_co','Preliminary lots per company'],['lot_bp','Preliminary lot size (10000 = 100%, multiples of 500)'],['pre_sec','Preliminary auction (sec)'],['news_sec','Newsletter (sec)'],['disc_sec','Discussion (sec)'],['auc_sec','Auction phase (sec)'],['window_sec','Selling-session time per team (sec)'],['open_sec','Offer stays open without bids (sec)'],['brk_sec','Break between auction stages (sec)'],['trans_sec','(unused) Round 1 break waits for the organizer'],['borrow_limit','Borrowing limit per auction round ₹'],['borrow_fee_pct','Borrowing fee % (charged on each draw)'],['borrow_pen','Outstanding ₹ per penalty point (−1 pt each)'],['swap_ttl','Swap proposal valid for (sec)']];
 async function ev(a,b){try{await api('organizer/event/'+a,b||{});await refresh()}catch(e){toast(e.message)}}
 function restart(){const m=document.createElement('div');m.className='modal';m.id='rm2';m.innerHTML=`<div class="card"><h3>Restart event</h3><p><b>Everything resets: clock, test/Round 1 trades, prices, Round 2 stakes, bids, swaps, news and scores.</b> Registered teams, settings and organizer accounts are kept. A database backup is saved first.</p><p>Type <b>RESTART</b> to confirm:</p><input id="rt" data-nf="1"><div class="row"><button class="g" onclick="rm2.remove()">Cancel</button><button class="r" onclick="ev('restart',{confirm:rt.value});rm2.remove()">Restart event</button></div></div>`;document.body.appendChild(m)}
-async function saveSet(){try{const b={};SETS.forEach(([k])=>{const e=$('#set_'+k);if(e&&e.value!=='')b[k]=e.value});await api('organizer/settings',b);FORM={};toast('Settings saved (timing/structure settings lock once the event starts)');await refresh()}catch(e){toast(e.message)}chgpw(){try{await api('organizer/password',{old:
+async function saveSet(){
+    try{
+        const b={};
+        SETS.forEach(([k])=>{const e=$('#set_'+k);if(e&&e.value!=='')b[k]=e.value});
+        await api('organizer/settings',b);
+        FORM={};
+        toast('Settings saved (timing/structure settings lock once the event starts)');
+        await refresh();
+    }catch(e){
+        toast(e.message);
+    }
+}
+async function chgpw(){
+    try{
+        await api('organizer/password',{old:po.value,new:pn.value});
+        toast('Password changed');
+    }catch(e){
+        toast(e.message);
+    }
+}
+async function tedit(id,b){await api('organizer/team/'+id,b);await refresh()}
+function askDel(id){const t=OD.te.find(x=>x.id==id);if(!t)return;const m=document.createElement('div');m.className='modal';m.id='dm';m.innerHTML=`<div class="card"><h3>Delete team</h3><p>Permanently delete <b>${esc(t.name)}</b> (${t.id}, leader ${esc(t.leader)})?</p><p style="color:var(--mut)">Its holdings return to the market, its trades and login session are removed, and it cannot reconnect. This cannot be undone.</p><div class="row"><button class="g" onclick="dm.remove()">Cancel</button><button class="r" onclick="doDel('${id}')">Yes, delete ${id}</button></div></div>`;document.body.appendChild(m)}
+async function doDel(id){try{await api('organizer/team/'+id+'/delete',{confirm_id:id});dm.remove();toast('Team '+id+' deleted');await refresh()}catch(e){toast(e.message)}}
+async function dl(path,name){const r=await fetch('/api/'+path,{headers:{'x-token':tok}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=name;a.click()}
+
+function orgView(){
+    const s=OD.st,st=S.status,stg=S.stage,nl=OD.ne||[],r1=['idle','test','r1','trans1'].includes(stg),run=['running','paused'].includes(st);
+    const flowChips=['test','r1','trans1','r2pre','brk0','a1','brk1','a2','brk2','a3'].map(n=>`<span class="chip ${n==stg?'on':''}">${{test:'Test',r1:'Round 1',trans1:'Break – waits for organizer',r2pre:'R2 Prelim',brk0:'Break',a1:'Auction 1',brk1:'Break',a2:'Auction 2',brk2:'Break',a3:'Auction 3'}[n]}</span>`).join(' → ');
+    H(head(`<span class="pill">organizer</span>`)+`<main><div class="card"><h3>Event flow</h3><div class="row">${flowChips}</div><div class="row" style="margin-top:10px">
+    <button class="s" ${st!='idle'?'disabled':''} onclick="ev('start')">▶ Start event (Test Round)</button><button ${st!='running'?'disabled':''} onclick="ev('pause')">⏸ Pause</button><button ${st!='paused'?'disabled':''} onclick="ev('resume')">⏯ Resume</button>
+    <button class="${stg=='trans1'?'s':'g'}" style="${stg=='trans1'?'font-size:18px;padding:10px 24px':''}" ${!(run&&stg=='trans1')?'disabled':''} onclick="ev('start_r2')">▶ START ROUND 2</button><button class="g" ${!run?'disabled':''} onclick="ev('jump',{target:'next'})">⏭ Skip to next stage</button><button class="g" ${!run||!['test','r1','trans1'].includes(stg)?'disabled':''} onclick="confirm('Jump straight to Round 2? Round 1 will be frozen now.')&&ev('jump',{target:'r2pre'})">Start Round 2 now</button>
+    <button class="g" ${!run?'disabled':''} onclick="confirm('End the whole event now?')&&ev('end')">⏹ End</button><button class="r" onclick="restart()">RESTART EVENT</button>
+    <button class="g" onclick="dl('organizer/export','finestra_round1.csv')">Export Round 1</button><button class="g" onclick="dl('r2/export','finestra_round2.csv')">Export Round 2</button></div></div>
+    ${r1?`<div class="grid g4" style="margin-top:12px">${[['Teams',s.teams],['Active',s.active],['Index',S.index],['Advancing',s.advancing],['Declining',s.declining],['Top gainer',s.gainer],['Top loser',s.loser],['Trades',s.trades],['Volume',s.volume]].map(k=>`<div class="card kpi"><h3>${k[0]}</h3><b>${k[1]}</b></div>`).join('')}</div>
+    <div class="grid g2" style="margin-top:12px"><div class="card"><h3>Round 1 live leaderboard (full scoring)</h3>${lbTable(OD.lb,true)}</div><div class="card"><h3>Market & Price Overrides</h3>${orgStockTable()}</div></div>
+    <div class="card" style="margin-top:12px"><h3>Round 1 market events (${nl.filter(n=>n.released).length}/${nl.length} released)</h3><div style="max-height:320px;overflow:auto"><table><tr><th>ID</th><th class="l">Headline</th><th>Type</th><th>Industry</th><th>Dir</th><th>Sev</th><th>Status</th><th></th></tr>${nl.map(n=>`<tr><td>${n.id}</td><td class="l">${esc(n.headline)}</td><td>${n.kind}</td><td>${esc(String(n.industry||'').split(' ')[0])}</td><td class="${n.direction>0?'up':'dn'}">${n.direction>0?'▲':'▼'}</td><td>${n.severity}</td><td>${n.released?'Released #'+n.released_upd:n.release_t!=null?'Auto @'+mm(n.release_t):'Manual'}</td><td>${n.released?'':`<button class="g" onclick="ev('release',{id:'${n.id}'})">Release</button>`}</td></tr>`).join('')}</table></div></div>`:''}
+    <div class="card" style="margin-top:12px"><h3>Teams (${OD.te.length})</h3><table><tr><th>ID</th><th class="l">Name</th><th class="l">Leader</th><th>Members</th><th>Recovery code</th><th>Status</th><th>Actions</th></tr>${OD.te.map(t=>`<tr><td>${t.id}</td><td class="l">${esc(t.name)}</td><td class="l">${esc(t.leader)}</td><td>${t.members}</td><td>${t.recovery}</td><td>${t.status}</td><td><button class="g" onclick="tedit('${t.id}',{status:'${t.status=='deactivated'?'approved':'deactivated'}'})">${t.status=='deactivated'?'Activate':'Deactivate'}</button> <button class="g" onclick="tedit('${t.id}',{new_recovery:1})">New code</button> <button class="g" onclick="n=prompt('New team name');n&&tedit('${t.id}',{name:n})">Rename</button> <button class="r" title="Delete team" aria-label="Delete team ${t.id}" onclick="askDel('${t.id}')">🗑 Delete</button></td></tr>`).join('')}</table></div>
+    <div class="grid gh" style="margin-top:12px"><div class="card"><h3>Settings</h3><div class="grid g4">${SETS.map(([k,l])=>`<div><label style="font-size:12px;color:var(--mut)">${l}</label><input id="set_${k}" value="${esc(OD.se[k]??'')}"></div>`).join('')}</div><button onclick="saveSet()">Save settings</button>
+    <h3 style="margin-top:14px">Change password</h3><div class="row"><input id="po" type="password" placeholder="Current"><input id="pn" type="password" placeholder="New"><button class="g" onclick="chgpw()">Change</button></div></div>
+    <div class="card"><h3>Audit log (latest)</h3><div style="max-height:360px;overflow:auto"><table><tr><th>Time</th><th class="l">Actor</th><th class="l">Action</th><th class="l">Detail</th></tr>${OD.au.slice(0,25).map(a=>`<tr><td>${new Date(a.ts*1000).toLocaleTimeString()}</td><td class="l">${esc(a.actor)}</td><td class="l">${esc(a.action)}</td><td class="l" style="white-space:normal">${esc(a.detail).slice(0,160)}</td></tr>`).join('')}</table></div></div></div>${chartCard}</main>${WM}`);
+    chartAfterRender();
+}
+
+// ---------- dispatch ----------
+function render(){
+    const st=S.stage;if(!st||!role)return;
+    if(role=='organizer')return orgView();
+    if(st=='ended')return resultsView();
+    if(st=='trans1'||BRK.includes(st))return interstitial();
+    return role=='team'?teamView():specView();
+}
+
+function boot(){
+    if(!tok)return landing();
+    api('me').then(()=>{connect();refresh()}).catch(()=>landing());
+}
+
+document.addEventListener('DOMContentLoaded', boot);
