@@ -99,20 +99,15 @@ def enter_stage(n, prev, start):
     audit("system", "stage", f"{prev} -> {n}")
 
 def apply_news_impact_now(nid):
-    """CRITICAL FIX: Apply news impact immediately using symbols, sens, impacts, and direction."""
     news = C.execute("SELECT * FROM news WHERE id=?", (nid,)).fetchone()
     if not news: return
     upd = int(D.get(C, "upd") or 0)
     
-    try:
-        sens = json.loads(news["sens"] or "{}")
-    except Exception:
-        sens = {}
+    try: sens = json.loads(news["sens"] or "{}")
+    except Exception: sens = {}
 
-    try:
-        impacts = json.loads(news["impacts"] or "{}") if "impacts" in news.keys() and news["impacts"] else {}
-    except Exception:
-        impacts = {}
+    try: impacts = json.loads(news["impacts"] or "{}") if "impacts" in news.keys() and news["impacts"] else {}
+    except Exception: impacts = {}
 
     raw_syms = str(news["symbols"] if "symbols" in news.keys() and news["symbols"] else "")
     target_symbols = [s.strip() for s in raw_syms.split(",") if s.strip()]
@@ -129,11 +124,8 @@ def apply_news_impact_now(nid):
             old_price = co["price"]
             pct = 0.0
 
-            # 1. Direct symbol sensitivity or impact mapping from seed data
-            if sym in sens:
-                pct = float(sens[sym])
-            elif sym in impacts:
-                pct = float(impacts[sym])
+            if sym in sens: pct = float(sens[sym])
+            elif sym in impacts: pct = float(impacts[sym])
             elif is_mega:
                 dir_val = news["direction"] if "direction" in news.keys() else 1
                 multiplier = 1.0 if (str(dir_val).lower() in ("bullish", "positive", "up", "1") or float(dir_val or 1) > 0) else -1.0
@@ -146,18 +138,14 @@ def apply_news_impact_now(nid):
                 impact_val = float(news["impact"] if "impact" in news.keys() and news["impact"] is not None else (sev * 1.0))
                 pct = multiplier * (impact_val / 100.0)
 
-            if abs(pct) < 1e-6:
-                continue
+            if abs(pct) < 1e-6: continue
 
-            # Bounded safety limits (-30% to +50%)
             pct = max(-0.30, min(0.50, float(pct)))
             new_price = round(max(1.0, old_price * (1.0 + pct)), 2)
 
-            # Update company price immediately
             C.execute("UPDATE companies SET price=?, prev_price=?, trend=? WHERE symbol=?", 
                       (new_price, old_price, "Bullish" if pct > 0 else "Bearish", sym))
 
-            # Update candlestick price history
             hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (sym, upd)).fetchone()
             if hist:
                 high_val = max(hist["h"], new_price)
@@ -168,7 +156,7 @@ def apply_news_impact_now(nid):
                 base_o = last_h["c"] if last_h else old_price
                 C.execute("INSERT INTO price_history(symbol, upd, o, h, l, c, v) VALUES(?,?,?,?,?,?,0)", 
                           (sym, upd, base_o, max(base_o, new_price), min(base_o, new_price), new_price))
-                
+
 def market_tick(name, el, start, rel):
     tick, itick, ia, total = mcfg(name); upd = int(D.get(C, "upd")); ch = False
     
@@ -410,6 +398,21 @@ async def settings(b: dict, req: Request):
 async def get_settings(req: Request):
     need(req, "organizer"); return {k: D.get(C, k) for k in ("spectator_code", "reg_code", "auto_news") + tuple(RANGES)}
 
+@app.post("/api/organizer/price/override")
+async def price_override(b: dict, req: Request):
+    s = need(req, "organizer")
+    symbol = b.get("symbol")
+    new_price = b.get("price")
+    if not symbol or new_price is None:
+        raise HTTPException(400, "Symbol and price are required")
+    try:
+        M.manual_price_adjustment(C, symbol, float(new_price))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    audit(s["ref"], "price_override", f"{symbol} -> {new_price}")
+    await push()
+    return {"ok": True}
+
 @app.post("/api/organizer/event/{action}")
 async def event(action: str, req: Request):
     s = need(req, "organizer"); stt = D.get(C, "status")
@@ -449,22 +452,20 @@ async def event(action: str, req: Request):
             if row: nid = row["id"]
         if not nid: raise HTTPException(400, "News ID is required")
         
-        # Mark news as released in database
         C.execute("UPDATE news SET released=1, released_upd=? WHERE id=? AND released=0", (int(D.get(C, "upd") or 0), nid))
-        
-        # Apply the official shock calculation from market_engine
         try:
             M.apply_news_shock(C, nid)
+            apply_news_impact_now(nid)
         except Exception as e:
             print("news shock error:", repr(e))
             
         R2.SOUNDS.append("alert")
-        
-        # Force immediate broadcast to all connected clients
         await push("update")
-        
         audit(s["ref"], f"event_{action}", json.dumps(b))
         return state()
+    else: raise HTTPException(400, f"Cannot {action} while {stt}")
+    
+    audit(s["ref"], f"event_{action}", json.dumps(b)); await push("restart" if action == "restart" else "update"); return state()
 
 # ---------- Round 2 ----------
 def r2_ctx(need_auction=True):
