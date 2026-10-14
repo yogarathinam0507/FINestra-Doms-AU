@@ -260,11 +260,54 @@ async function chgpw(){
         toast(e.message);
     }
 }
+async function manualPriceOverride() {
+    const sym = $('#ovSymbol').value;
+    const price = parseFloat($('#ovPrice').value);
+    if (!sym || isNaN(price)) {
+        toast('Please select a symbol and enter a valid price');
+        return;
+    }
+    try {
+        await api('organizer/price/override', { symbol: sym, price: price }, 'POST');
+        toast(`Price for ${sym} successfully updated to ₹${price}`);
+        refresh();
+    } catch (e) {
+        toast(e.message);
+    }
+}
 async function tedit(id,b){await api('organizer/team/'+id,b);await refresh()}
 function askDel(id){const t=OD.te.find(x=>x.id==id);if(!t)return;const m=document.createElement('div');m.className='modal';m.id='dm';m.innerHTML=`<div class="card"><h3>Delete team</h3><p>Permanently delete <b>${esc(t.name)}</b> (${t.id}, leader ${esc(t.leader)})?</p><p style="color:var(--mut)">Its holdings return to the market, its trades and login session are removed, and it cannot reconnect. This cannot be undone.</p><div class="row"><button class="g" onclick="dm.remove()">Cancel</button><button class="r" onclick="doDel('${id}')">Yes, delete ${id}</button></div></div>`;document.body.appendChild(m)}
 async function doDel(id){try{await api('organizer/team/'+id+'/delete',{confirm_id:id});dm.remove();toast('Team '+id+' deleted');await refresh()}catch(e){toast(e.message)}}
 async function dl(path,name){const r=await fetch('/api/'+path,{headers:{'x-token':tok}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=name;a.click()}
 
+// ---------- Organizer Price Override Helpers ----------
+async function manualPriceOverride(sym) {
+    const input = document.getElementById(`ov_${sym}`);
+    const price = parseFloat(input ? input.value : '');
+    if (isNaN(price) || price <= 0) {
+        toast('Enter a valid price');
+        return;
+    }
+    try {
+        await api('organizer/price/override', { symbol: symbol=sym, price: price }, 'POST');
+        toast(`Price for ${sym} successfully updated to ₹${price}`);
+        refresh();
+    } catch (e) {
+        toast(e.message);
+    }
+}
+
+function orgStockTable() {
+    return `<table><tr><th>Symbol</th><th class="l">Company</th><th>Price</th><th>New Price (₹)</th><th></th></tr>${(S.stocks || []).map(x => `
+        <tr>
+            <td><b>${x.symbol}</b></td>
+            <td class="l">${esc(x.name)}<br><small style="color:var(--mut)">${esc(x.industry)}</small></td>
+            <td>₹${fmt(x.price)}</td>
+            <td><input id="ov_${x.symbol}" type="number" step="0.05" value="${x.price}" style="width:110px;margin:0"></td>
+            <td><button class="s" onclick="manualPriceOverride('${x.symbol}')">Update</button></td>
+        </tr>
+    `).join('')}</table>`;
+}
 function orgView(){
     const s=OD.st,st=S.status,stg=S.stage,nl=OD.ne||[],r1=['idle','test','r1','trans1'].includes(stg),run=['running','paused'].includes(st);
     const flowChips=['test','r1','trans1','r2pre','brk0','a1','brk1','a2','brk2','a3'].map(n=>`<span class="chip ${n==stg?'on':''}">${{test:'Test',r1:'Round 1',trans1:'Break – waits for organizer',r2pre:'R2 Prelim',brk0:'Break',a1:'Auction 1',brk1:'Break',a2:'Auction 2',brk2:'Break',a3:'Auction 3'}[n]}</span>`).join(' → ');
