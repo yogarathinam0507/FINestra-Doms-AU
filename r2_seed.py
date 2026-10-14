@@ -3,10 +3,10 @@ News is composed offline from professionally worded templates (no network/LLM ca
 per-company price impacts; only headline/article/severity/sentiment are ever shown to teams."""
 import random, json
 # code, industry, company, symbol, valuation (INR), icon
-INDUSTRIES = [("BANK","Banking & Fintech","Orbis Bank","ORBK",6_000_000,"🏦"),("TECH","Information Technology","Nexora Systems","NXRA",6_500_000,"💻"),
-("AUTO","Automobile & EV","Vanta Motors","VNTA",5_500_000,"🚗"),("RNEW","Renewable Energy","Heliora Power","HLRA",5_000_000,"☀️"),
-("PHRM","Pharma & Healthcare","Curavita Labs","CRVT",7_000_000,"💊"),("INFR","Infrastructure & Construction","Stratos Infra","STRX",6_000_000,"🏗️"),
-("METL","Metals & Mining","Ferrolux Metals","FRLX",4_500_000,"⛏️"),("RETL","Consumer & Retail","Bazaario Retail","BZRO",4_500_000,"🛍️")]
+INDUSTRIES = [("BANK","Banking & Fintech","Orbis Bank","ORBK",4_000_000,"🏦"),("TECH","Information Technology","Nexora Systems","NXRA",4_500_000,"💻"),
+("AUTO","Automobile & EV","Vanta Motors","VNTA",3_500_000,"🚗"),("RNEW","Renewable Energy","Heliora Power","HLRA",3_000_000,"☀️"),
+("PHRM","Pharma & Healthcare","Curavita Labs","CRVT",4_000_000,"💊"),("INFR","Infrastructure & Construction","Stratos Infra","STRX",3_000_000,"🏗️"),
+("METL","Metals & Mining","Ferrolux Metals","FRLX",3_500_000,"⛏️"),("RETL","Consumer & Retail","Bazaario Retail","BZRO",4_500_000,"🛍️")]
 V = {"BANK":("the banking regulator","deposit and funding costs","retail lending"),"TECH":("the IT ministry","skilled-talent costs","enterprise cloud services"),
 "AUTO":("the transport ministry","battery cells and chips","electric vehicles"),"RNEW":("the power ministry","solar modules and polysilicon","renewable capacity"),
 "PHRM":("the drug regulator","active pharmaceutical ingredients","specialty formulations"),"INFR":("the highways authority","cement and structural steel","project execution"),
