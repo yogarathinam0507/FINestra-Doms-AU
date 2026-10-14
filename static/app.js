@@ -77,14 +77,15 @@ async function loadData(){
     if(role=='organizer')j.push(orgData());
     await Promise.all(j);
 }
+
 function connect(){
     ws = new WebSocket((location.protocol=='https:'?'wss://':'ws://')+location.host+'/ws');
     ws.onmessage = m => {
         const d = JSON.parse(m.data);
-        if (d.type == 'restart') toast('Event restarted');
+        if(d.type == 'restart') toast('Event restarted');
         lastSig = ''; 
         refresh();
-        if (typeof CH !== 'undefined' && CH.sym && typeof chartSync === 'function') {
+        if(typeof CH !== 'undefined' && CH.sym && typeof chartSync === 'function'){
             chartSync(true);
         }
     };
@@ -175,7 +176,7 @@ function chartInfo(d){const a=d.analysis,f=d.fundamentals,pl=t=>`<span class="pi
 async function chartSync(force){if(!CH.sym||!CH.chart)return;CH.at=Date.now();if(CH.busy){CH.again=true;return}CH.busy=true;
  try{const sym=CH.sym,inc=!force&&CH.raw.length>0&&CH.last>=0,d=await api('chart/'+sym+(inc?'?since='+CH.last:''));if(sym!==CH.sym)return;
   if(!inc||d.full||d.epoch!==CH.epoch){const fit=!CH.raw.length||d.epoch!==CH.epoch,rg=fit?null:CH.chart.timeScale().getVisibleLogicalRange();CH.raw=d.candles;CH.epoch=d.epoch;chartAll(fit);if(rg)CH.chart.timeScale().setVisibleLogicalRange(rg)}else{try{chartMerge(d.candles)}catch(e){CH.raw=[];CH.last=-1;CH.busy=false;return chartSync(true)}}
-  CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
+ CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
 function chartOpen(sym,scroll){const c=chartEl(),ph=$('#chartPh');if(ph)ph.replaceWith(c);c.style.display='block';cur=sym;chartInit();
  if(CH.sym!==sym){CH.sym=sym;CH.raw=[];CH.agg=[];CH.last=-1;CH.epoch=null;CH.info='';c.querySelector('#chTitle').textContent=sym+' – '+((S.stocks||[]).find(x=>x.symbol==sym)||{}).name}
  if(scroll)c.scrollIntoView({behavior:'smooth'});chartSync(true)}
