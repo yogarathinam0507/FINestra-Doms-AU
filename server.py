@@ -406,11 +406,35 @@ async def price_override(b: dict, req: Request):
     if not symbol or new_price is None:
         raise HTTPException(400, "Symbol and price are required")
     try:
-        M.manual_price_adjustment(C, symbol, float(new_price))
+        # Update price and active candlestick immediately
+        upd = int(D.get(C, "upd") or 0)
+        with D.tx(C):
+            co = C.execute("SELECT price FROM companies WHERE symbol=?", (symbol,)).fetchone()
+            if not co:
+                raise HTTPException(404, "Stock symbol not found")
+            old_price = co["price"]
+            target_price = round(float(new_price), 2)
+            
+            C.execute("UPDATE companies SET price=?, prev_price=?, trend=? WHERE symbol=?", 
+                      (target_price, old_price, "Bullish" if target_price > old_price else "Bearish", symbol))
+            
+            # Sync candlestick history for real-time chart update
+            hist = C.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (symbol, upd)).fetchone()
+            if hist:
+                high_val = max(hist["h"], target_price)
+                low_val = min(hist["l"], target_price)
+                C.execute("UPDATE price_history SET h=?, l=?, c=? WHERE symbol=? AND upd=?", (high_val, low_val, target_price, symbol, upd))
+            else:
+                last_h = C.execute("SELECT c FROM price_history WHERE symbol=? ORDER BY upd DESC LIMIT 1", (symbol,)).fetchone()
+                base_o = last_h["c"] if last_h else old_price
+                C.execute("INSERT INTO price_history(symbol, upd, o, h, l, c, v) VALUES(?,?,?,?,?,?,0)", 
+                          (symbol, upd, base_o, max(base_o, target_price), min(base_o, target_price), target_price))
+                          
     except Exception as e:
         raise HTTPException(400, str(e))
+        
     audit(s["ref"], "price_override", f"{symbol} -> {new_price}")
-    await push()
+    await push("update", {"stocks": stocks()})
     return {"ok": True}
 
 @app.post("/api/organizer/event/{action}")
