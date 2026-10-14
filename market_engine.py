@@ -29,21 +29,14 @@ def analysis(closes):
                 trend="Bullish" if s5 >= s20 else "Bearish", tech=max(0, min(100, int(score))))
 
 def apply_news_shock(c, news_id):
-    """Immediately calculates and applies news/event price shocks (manual, automatic, or mega events)
-       at the exact second they trigger, updating company valuations and real-time candles instantly.
-    """
     n = c.execute("SELECT * FROM news WHERE id=?", (news_id,)).fetchone()
     if not n: return
 
-    try:
-        impacts = json.loads(n["impacts"] or "{}")
-    except Exception:
-        impacts = {}
+    try: impacts = json.loads(n["impacts"] or "{}")
+    except Exception: impacts = {}
 
-    try:
-        sens = json.loads(n["sens"] or "{}")
-    except Exception:
-        sens = {}
+    try: sens = json.loads(n["sens"] or "{}")
+    except Exception: sens = {}
 
     upd = int(D.get(c, "upd") or 0)
     cos = c.execute("SELECT * FROM companies").fetchall()
@@ -55,10 +48,8 @@ def apply_news_shock(c, news_id):
             old_price = co["price"]
             pct = 0.0
 
-            if sym in sens:
-                pct = float(sens[sym])
-            elif sym in impacts:
-                pct = float(impacts[sym])
+            if sym in sens: pct = float(sens[sym])
+            elif sym in impacts: pct = float(impacts[sym])
             elif is_mega:
                 direction = float(n.get("direction", 1) or 1)
                 base_impact = float(n.get("impact", 5.0) or 5.0)
@@ -71,8 +62,7 @@ def apply_news_shock(c, news_id):
                     impact_val = float(n.get("impact", 2.0) or 2.0)
                     pct = direction * (impact_val / 100.0)
 
-            if abs(pct) < 1e-6:
-                continue
+            if abs(pct) < 1e-6: continue
 
             pct = max(-0.50, min(1.00, float(pct)))
             new_price = max(1.0, round(old_price * (1.0 + pct), 2))
@@ -94,11 +84,38 @@ def apply_news_shock(c, news_id):
                       (time.time(), "news_shock_engine", "immediate_price_shock",
                        json.dumps(dict(news_id=news_id, symbol=sym, price_before=old_price, price_after=new_price, impact_pct=pct * 100))))
 
+def manual_price_adjustment(c, symbol, new_price):
+    """Allows the organizer to instantly change/override any stock price immediately."""
+    upd = int(D.get(c, "upd") or 0)
+    co = c.execute("SELECT * FROM companies WHERE symbol=?", (symbol,)).fetchone()
+    if not co: raise ValueError("Unknown stock symbol")
+    
+    old_price = co["price"]
+    new_price = max(1.0, float(new_price))
+    
+    with D.tx(c):
+        c.execute("UPDATE companies SET prev_price=?, price=?, trend=? WHERE symbol=?",
+                  (old_price, new_price, "Bullish" if new_price > old_price else "Bearish", symbol))
+        
+        candle = c.execute("SELECT * FROM price_history WHERE symbol=? AND upd=?", (symbol, upd)).fetchone()
+        if candle:
+            new_h = max(candle["h"], new_price)
+            new_l = min(candle["l"], new_price)
+            c.execute("UPDATE price_history SET h=?, l=?, c=? WHERE symbol=? AND upd=?",
+                      (new_h, new_l, new_price, symbol, upd))
+        else:
+            c.execute("INSERT INTO price_history(symbol,upd,o,h,l,c,v) VALUES(?,?,?,?,?,?,?)",
+                      (symbol, upd, old_price, max(old_price, new_price), min(old_price, new_price), new_price, 0))
+            
+        c.execute("INSERT INTO audit(ts,actor,action,detail) VALUES(?,?,?,?)",
+                  (time.time(), "organizer", "manual_price_override",
+                   json.dumps(dict(symbol=symbol, price_before=old_price, price_after=new_price))))
+
 def step(c, upd, cap=0.06, factor=1.0):
     """Executes one official market update tick (every 30 seconds). 
        Combines normalized, bounded components (50/30/20 model):
        - 50% Fundamentals and Technical indicators
-       - 30% Actual team buying/selling pressure (Order Flow)
+       - 30% Actual team buying/selling pressure (Current Tick Order Flow)
        - 20% Geometric Brownian Motion (GBM)
     """
     rnd = random.Random(1000 + upd)
@@ -106,12 +123,11 @@ def step(c, upd, cap=0.06, factor=1.0):
     
     news = c.execute("SELECT * FROM news WHERE released=1 AND ? - released_upd < duration", (upd,)).fetchall()
     is_mega = any(n.get("kind") in ("mega", "shock") or "All Sectors" in str(n.get("industry", "")) for n in news)
-    if is_mega: 
-        cap = max(cap, 0.20)
+    if is_mega: cap = max(cap, 0.20)
     
-    # Fetch team order flow pressures (30% weight component)
+    # FIXED: Only fetch order flow pressure from the CURRENT tick (upd) to prevent compounding runaway trends
     orders_pressure = {}
-    ord_rows = c.execute("SELECT symbol, side, SUM(qty) as tot_qty FROM orders GROUP BY symbol, side").fetchall()
+    ord_rows = c.execute("SELECT symbol, side, SUM(qty) as tot_qty FROM orders WHERE upd=? GROUP BY symbol, side", (upd,)).fetchall()
     for r in ord_rows:
         sym = r["symbol"]
         qty = r["tot_qty"] or 0
@@ -129,21 +145,18 @@ def step(c, upd, cap=0.06, factor=1.0):
         # Component 1: Fundamentals & Technicals (50% weight)
         fund_score = float(co["fund"] or 50.0)
         tech_score = float(a["tech"] or 50.0)
-        fund_tech_combined = (0.6 * fund_score) + (0.4 * tech_score) # 0 to 100 scale
-        fund_tech_return = max(-0.05, min(0.05, (fund_tech_combined - 50.0) / 500.0)) # Normalized & bounded (-5% to +5%)
+        fund_tech_combined = (0.6 * fund_score) + (0.4 * tech_score)
+        fund_tech_return = max(-0.03, min(0.03, (fund_tech_combined - 50.0) / 800.0))
         
-        # Component 2: Team Order Flow Pressure (30% weight)
+        # Component 2: Team Order Flow Pressure (30% weight) - Bounded safely
         net_flow = orders_pressure.get(sym, 0.0)
-        flow_return = max(-0.05, min(0.05, net_flow / 50000.0)) # Normalized & bounded (-5% to +5%)
+        flow_return = max(-0.03, min(0.03, net_flow / 100000.0))
         
         # Component 3: Geometric Brownian Motion (GBM) (20% weight)
         beta = float(co["beta"] or 1.0)
-        mu = 0.001 * beta
         sigma = float(co["vol"] or 0.02) * factor
-        dt = 1.0
         z = rnd.gauss(0, 1)
-        gbm_return = (mu - 0.5 * (sigma ** 2)) * dt + sigma * math.sqrt(dt) * z
-        gbm_return = max(-0.05, min(0.05, gbm_return)) # Normalized & bounded (-5% to +5%)
+        gbm_return = max(-0.03, min(0.03, sigma * z))
         
         # Weighted combination: 50% Fund/Tech + 30% Order Flow + 20% GBM
         combined_return = (0.50 * fund_tech_return) + (0.30 * flow_return) + (0.20 * gbm_return)
@@ -155,20 +168,14 @@ def step(c, upd, cap=0.06, factor=1.0):
             raw_ind = str(n.get("industry", ""))
             n_industries = [i.strip() for i in raw_ind.split(",") if i.strip()]
             
-            try:
-                sn = json.loads(n["sens"] or "{}")
-            except Exception:
-                sn = {}
+            try: sn = json.loads(n["sens"] or "{}")
+            except Exception: sn = {}
             
             mult = 1.0
-            if is_mega or "All Sectors" in raw_ind:
-                mult = 1.0
-            elif sym in sn:
-                mult = sn[sym]
-            elif co["industry"] in n_industries:
-                mult = 1.2 if co["industry"] == n_industries[0] else 0.75
-            else:
-                mult = 0.30
+            if is_mega or "All Sectors" in raw_ind: mult = 1.0
+            elif sym in sn: mult = sn[sym]
+            elif co["industry"] in n_industries: mult = 1.2 if co["industry"] == n_industries[0] else 0.75
+            else: mult = 0.30
 
             if sym in symbols or co["industry"] in n_industries or is_mega or "All Sectors" in raw_ind:
                 direction = float(n.get("direction", 1) or 1)
@@ -177,8 +184,8 @@ def step(c, upd, cap=0.06, factor=1.0):
 
         total_return = max(-cap * factor, min(cap * factor, combined_return + imp))
         cl = round(max(1.0, old_price * (1.0 + total_return)), 2)
-        hi = round(max(old_price, cl) * (1.0 + abs(rnd.gauss(0, 0.003))), 2)
-        lo = round(min(old_price, cl) * (1.0 - abs(rnd.gauss(0, 0.003))), 2)
+        hi = round(max(old_price, cl) * (1.0 + abs(rnd.gauss(0, 0.002))), 2)
+        lo = round(min(old_price, cl) * (1.0 - abs(rnd.gauss(0, 0.002))), 2)
         
         c.execute("INSERT INTO price_history(symbol,upd,o,h,l,c,v) VALUES(?,?,?,?,?,?,?)", (sym, upd, old_price, hi, lo, cl, 0))
         c.execute("UPDATE companies SET prev_price=price, price=?, trend=?, tech=? WHERE symbol=?", (cl, a["trend"], a["tech"], sym))
