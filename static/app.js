@@ -77,15 +77,14 @@ async function loadData(){
     if(role=='organizer')j.push(orgData());
     await Promise.all(j);
 }
-
 function connect(){
     ws = new WebSocket((location.protocol=='https:'?'wss://':'ws://')+location.host+'/ws');
     ws.onmessage = m => {
         const d = JSON.parse(m.data);
-        if(d.type == 'restart') toast('Event restarted');
+        if (d.type == 'restart') toast('Event restarted');
         lastSig = ''; 
         refresh();
-        if(typeof CH !== 'undefined' && CH.sym && typeof chartSync === 'function'){
+        if (typeof CH !== 'undefined' && CH.sym && typeof chartSync === 'function') {
             chartSync(true);
         }
     };
@@ -111,7 +110,7 @@ setInterval(()=>{
 // ---------- header ----------
 function head(extra){
     const s=S,r1=['test','r1'].includes(s.stage)&&s.status!='idle';
-    return `<header><b>FINestra</b><span class="pill">@Doms, AU</span><span class="pill gold">${esc(s.label||'')}</span>${s.status!='idle'&&s.stage!='ended'&&!s.waiting?`<span class="pill cd" id="sc">${mm(s.stage_remaining/(s.scale||1))}</span>`:''}<span class="pill">${s.status=='paused'?'⏸ PAUSED':(s.status||'').toUpperCase()}</span>
+    return `<header><b>FINestra</b><span class="pill">@Doms, AU</span><span class="pill gold">${esc(s.label||'')}</span>${s.status!='idle'&&s.stage!='ended'&&!s.waiting?`<span class="pill cd" id="sc">${mm(s.stage_remaining/(S.scale||1))}</span>`:''}<span class="pill">${s.status=='paused'?'⏸ PAUSED':(s.status||'').toUpperCase()}</span>
     ${r1?`<span class="pill">Update #${s.update}/${s.max_update}</span><span class="pill">Every ${s.interval}s</span><span class="pill cd ${s.final5?'gold':''}" id="nx">Next update ${s.next_update_in==null?'--':mm(s.next_update_in/(s.scale||1))}</span><span class="pill">Index ${s.index}</span>`:''}
     <span class="pill" id="tm">Time ${mm((s.elapsed||0)/(s.scale||1))} / ${mm((s.total||0)/(s.scale||1))}</span><span class="sp"></span>${extra||''}${themeBtn()}<button class="g" onclick="logout()">Logout</button></header>
     ${s.stage=='test'?`<div class="bar test">TEST ROUND – <span id="tb">${mm(s.stage_remaining/(s.scale||1))}</span> · practice only: nothing here counts, all test data is wiped when Round 1 begins</div>`:''}
@@ -176,7 +175,7 @@ function chartInfo(d){const a=d.analysis,f=d.fundamentals,pl=t=>`<span class="pi
 async function chartSync(force){if(!CH.sym||!CH.chart)return;CH.at=Date.now();if(CH.busy){CH.again=true;return}CH.busy=true;
  try{const sym=CH.sym,inc=!force&&CH.raw.length>0&&CH.last>=0,d=await api('chart/'+sym+(inc?'?since='+CH.last:''));if(sym!==CH.sym)return;
   if(!inc||d.full||d.epoch!==CH.epoch){const fit=!CH.raw.length||d.epoch!==CH.epoch,rg=fit?null:CH.chart.timeScale().getVisibleLogicalRange();CH.raw=d.candles;CH.epoch=d.epoch;chartAll(fit);if(rg)CH.chart.timeScale().setVisibleLogicalRange(rg)}else{try{chartMerge(d.candles)}catch(e){CH.raw=[];CH.last=-1;CH.busy=false;return chartSync(true)}}
- CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
+  CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
 function chartOpen(sym,scroll){const c=chartEl(),ph=$('#chartPh');if(ph)ph.replaceWith(c);c.style.display='block';cur=sym;chartInit();
  if(CH.sym!==sym){CH.sym=sym;CH.raw=[];CH.agg=[];CH.last=-1;CH.epoch=null;CH.info='';c.querySelector('#chTitle').textContent=sym+' – '+((S.stocks||[]).find(x=>x.symbol==sym)||{}).name}
  if(scroll)c.scrollIntoView({behavior:'smooth'});chartSync(true)}
@@ -187,7 +186,7 @@ function chartAfterRender(){if(CH.card&&CH.sym&&document.body.contains(CH.card))
 // ---------- Round 1 team ----------
 let OP={sym:'AURB',qty:1},LQ=null,busy=false;
 const canTrade=()=>S.status=='running'&&['test','r1'].includes(S.stage);
-function pick(sym){OP.sym=sym;const o=$('#os');if(o)o.value=sym;qt();chartOpen(sym,false);$('#op'].scrollIntoView({behavior:'smooth',block:'center'})}
+function pick(sym){OP.sym=sym;const o=$('#os');if(o)o.value=sym;qt();chartOpen(sym,false);$('#op').scrollIntoView({behavior:'smooth',block:'center'})}
 function addq(n){OP.qty=Math.max(1,(+OP.qty||0)+n);FORM.q=OP.qty;$('#q').value=OP.qty;qt()}
 function maxq(){OP.qty=Math.max(1,LQ?.max_buy||1);FORM.q=OP.qty;$('#q').value=OP.qty;qt()}
 async function qt(){if(!$('#qs'))return;try{const q=await api('team/quote',{symbol:OP.sym,side:'BUY',qty:Math.max(1,+OP.qty||1)});LQ=q;
