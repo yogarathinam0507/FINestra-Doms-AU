@@ -41,10 +41,10 @@ def score(c, tid):
     base_ret = base_returns_map[tier]
     
     if portfolio_ret >= 0:
-        ret_adjustment = portfolio_ret * 3.0
+        ret_adjustment = portfolio_ret * 0.5
         ret_score = base_ret + ret_adjustment
     else:
-        ret_adjustment = abs(portfolio_ret) * 1.5
+        ret_adjustment = abs(portfolio_ret) * 1.0
         ret_score = base_ret - ret_adjustment
         
     ret = round(max(0.0, min(60.0, ret_score)), 2)
