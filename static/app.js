@@ -175,7 +175,7 @@ function chartInfo(d){const a=d.analysis,f=d.fundamentals,pl=t=>`<span class="pi
 async function chartSync(force){if(!CH.sym||!CH.chart)return;CH.at=Date.now();if(CH.busy){CH.again=true;return}CH.busy=true;
  try{const sym=CH.sym,inc=!force&&CH.raw.length>0&&CH.last>=0,d=await api('chart/'+sym+(inc?'?since='+CH.last:''));if(sym!==CH.sym)return;
   if(!inc||d.full||d.epoch!==CH.epoch){const fit=!CH.raw.length||d.epoch!==CH.epoch,rg=fit?null:CH.chart.timeScale().getVisibleLogicalRange();CH.raw=d.candles;CH.epoch=d.epoch;chartAll(fit);if(rg)CH.chart.timeScale().setVisibleLogicalRange(rg)}else{try{chartMerge(d.candles)}catch(e){CH.raw=[];CH.last=-1;CH.busy=false;return chartSync(true)}}
-  CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
+ CH.last=d.last;chartInfo(d)}catch(e){CH.last=-1}finally{CH.busy=false;if(CH.again){CH.again=false;chartSync()}}}
 function chartOpen(sym,scroll){const c=chartEl(),ph=$('#chartPh');if(ph)ph.replaceWith(c);c.style.display='block';cur=sym;chartInit();
  if(CH.sym!==sym){CH.sym=sym;CH.raw=[];CH.agg=[];CH.last=-1;CH.epoch=null;CH.info='';c.querySelector('#chTitle').textContent=sym+' – '+((S.stocks||[]).find(x=>x.symbol==sym)||{}).name}
  if(scroll)c.scrollIntoView({behavior:'smooth'});chartSync(true)}
@@ -260,54 +260,48 @@ async function chgpw(){
         toast(e.message);
     }
 }
-async function manualPriceOverride() {
-    const sym = $('#ovSymbol').value;
-    const price = parseFloat($('#ovPrice').value);
-    if (!sym || isNaN(price)) {
-        toast('Please select a symbol and enter a valid price');
-        return;
-    }
+async function tedit(id,b){await api('organizer/team/'+id,b);await refresh()}
+function askDel(id){const t=OD.te.find(x=>x.id==id);if(!t)return;const m=document.createElement('div');m.className='modal';m.id='dm';m.innerHTML=`<div class="card"><h3>Delete team</h3><p>Permanently delete <b>${esc(t.name)}</b> (${t.id}, leader ${esc(t.leader)})?</p><p style="color:var(--mut)">Its holdings return to the market, its trades and login session are removed, and it cannot reconnect. This cannot be undone.</p><div class="row"><button class="g" onclick="dm.remove()">Cancel</button><button class="r" onclick="doDel('${id}')">Yes, delete ${id}</button></div></div>`;document.body.appendChild(m)}
+async function doDel(id){try{await api('organizer/team/'+id,{confirm_id:id});dm.remove();toast('Team '+id+' deleted');await refresh()}catch(e){toast(e.message)}}
+async function dl(path,name){const r=await fetch('/api/'+path,{headers:{'x-token':tok}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=name;a.click()}
+
+// ---------- Round 2 Organizer Control Helpers ----------
+async function r2AuctionAction(action) {
     try {
-        await api('organizer/price/override', { symbol: sym, price: price }, 'POST');
-        toast(`Price for ${sym} successfully updated to ₹${price}`);
+        await api(`r2/org/auction/${action}`, {}, 'POST');
+        toast(`Round 2 auction action '${action}' executed successfully.`);
         refresh();
     } catch (e) {
         toast(e.message);
     }
 }
-async function tedit(id,b){await api('organizer/team/'+id,b);await refresh()}
-function askDel(id){const t=OD.te.find(x=>x.id==id);if(!t)return;const m=document.createElement('div');m.className='modal';m.id='dm';m.innerHTML=`<div class="card"><h3>Delete team</h3><p>Permanently delete <b>${esc(t.name)}</b> (${t.id}, leader ${esc(t.leader)})?</p><p style="color:var(--mut)">Its holdings return to the market, its trades and login session are removed, and it cannot reconnect. This cannot be undone.</p><div class="row"><button class="g" onclick="dm.remove()">Cancel</button><button class="r" onclick="doDel('${id}')">Yes, delete ${id}</button></div></div>`;document.body.appendChild(m)}
-async function doDel(id){try{await api('organizer/team/'+id+'/delete',{confirm_id:id});dm.remove();toast('Team '+id+' deleted');await refresh()}catch(e){toast(e.message)}}
-async function dl(path,name){const r=await fetch('/api/'+path,{headers:{'x-token':tok}});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=name;a.click()}
 
 // ---------- Organizer Price Override Helpers ----------
-async function manualPriceOverride(sym) {
-    const input = document.getElementById(`ov_${sym}`);
-    const price = parseFloat(input ? input.value : '');
-    if (isNaN(price) || price <= 0) {
-        toast('Enter a valid price');
-        return;
-    }
+async function overridePrice(symbol, currentPrice){
+    const val = prompt(`Enter new price for ${symbol} (Current: ₹${currentPrice}):`);
+    if(!val || isNaN(val)) return;
     try {
-        await api('organizer/price/override', { symbol: symbol=sym, price: price }, 'POST');
-        toast(`Price for ${sym} successfully updated to ₹${price}`);
-        refresh();
-    } catch (e) {
+        await api('organizer/price/override', { symbol: symbol, price: parseFloat(val) }, 'POST');
+        toast(`Price for ${symbol} updated to ₹${val}`);
+        await refresh();
+    } catch(e) {
         toast(e.message);
     }
 }
 
 function orgStockTable() {
-    return `<table><tr><th>Symbol</th><th class="l">Company</th><th>Price</th><th>New Price (₹)</th><th></th></tr>${(S.stocks || []).map(x => `
-        <tr>
+    return `<table><tr><th>Symbol</th><th class="l">Company</th><th>Price</th><th>Chg %</th><th>Action</th></tr>${(S.stocks || []).map(x => {
+        const c = x.price - x.prev_price, p = c / x.prev_price * 100;
+        return `<tr>
             <td><b>${x.symbol}</b></td>
             <td class="l">${esc(x.name)}<br><small style="color:var(--mut)">${esc(x.industry)}</small></td>
             <td>₹${fmt(x.price)}</td>
-            <td><input id="ov_${x.symbol}" type="number" step="0.05" value="${x.price}" style="width:110px;margin:0"></td>
-            <td><button class="s" onclick="manualPriceOverride('${x.symbol}')">Update</button></td>
-        </tr>
-    `).join('')}</table>`;
+            <td class="${cls(c)}">${p.toFixed(2)}%</td>
+            <td><button class="g" onclick="overridePrice('${x.symbol}',${x.price})">Change Price</button></td>
+        </tr>`;
+    }).join('')}</table>`;
 }
+
 function orgView(){
     const s=OD.st,st=S.status,stg=S.stage,nl=OD.ne||[],r1=['idle','test','r1','trans1'].includes(stg),run=['running','paused'].includes(st);
     const flowChips=['test','r1','trans1','r2pre','brk0','a1','brk1','a2','brk2','a3'].map(n=>`<span class="chip ${n==stg?'on':''}">${{test:'Test',r1:'Round 1',trans1:'Break – waits for organizer',r2pre:'R2 Prelim',brk0:'Break',a1:'Auction 1',brk1:'Break',a2:'Auction 2',brk2:'Break',a3:'Auction 3'}[n]}</span>`).join(' → ');
@@ -316,6 +310,16 @@ function orgView(){
     <button class="${stg=='trans1'?'s':'g'}" style="${stg=='trans1'?'font-size:18px;padding:10px 24px':''}" ${!(run&&stg=='trans1')?'disabled':''} onclick="ev('start_r2')">▶ START ROUND 2</button><button class="g" ${!run?'disabled':''} onclick="ev('jump',{target:'next'})">⏭ Skip to next stage</button><button class="g" ${!run||!['test','r1','trans1'].includes(stg)?'disabled':''} onclick="confirm('Jump straight to Round 2? Round 1 will be frozen now.')&&ev('jump',{target:'r2pre'})">Start Round 2 now</button>
     <button class="g" ${!run?'disabled':''} onclick="confirm('End the whole event now?')&&ev('end')">⏹ End</button><button class="r" onclick="restart()">RESTART EVENT</button>
     <button class="g" onclick="dl('organizer/export','finestra_round1.csv')">Export Round 1</button><button class="g" onclick="dl('r2/export','finestra_round2.csv')">Export Round 2</button></div></div>
+    
+    <div class="card" style="margin-top:12px">
+        <h3>Round 2 – Auction Controls (Industry Titans)</h3>
+        <p style="color:var(--mut);font-size:12px">Use these controls to manage live auction rounds, force completion if teams are stuck, or cancel current bidding blocks.</p>
+        <div class="row">
+            <button class="s" onclick="r2AuctionAction('force')">⚡ Force Complete Active Auction</button>
+            <button class="r" onclick="r2AuctionAction('cancel')">❌ Cancel Active Auction</button>
+        </div>
+    </div>
+
     ${r1?`<div class="grid g4" style="margin-top:12px">${[['Teams',s.teams],['Active',s.active],['Index',S.index],['Advancing',s.advancing],['Declining',s.declining],['Top gainer',s.gainer],['Top loser',s.loser],['Trades',s.trades],['Volume',s.volume]].map(k=>`<div class="card kpi"><h3>${k[0]}</h3><b>${k[1]}</b></div>`).join('')}</div>
     <div class="grid g2" style="margin-top:12px"><div class="card"><h3>Round 1 live leaderboard (full scoring)</h3>${lbTable(OD.lb,true)}</div><div class="card"><h3>Market & Price Overrides</h3>${orgStockTable()}</div></div>
     <div class="card" style="margin-top:12px"><h3>Round 1 market events (${nl.filter(n=>n.released).length}/${nl.length} released)</h3><div style="max-height:320px;overflow:auto"><table><tr><th>ID</th><th class="l">Headline</th><th>Type</th><th>Industry</th><th>Dir</th><th>Sev</th><th>Status</th><th></th></tr>${nl.map(n=>`<tr><td>${n.id}</td><td class="l">${esc(n.headline)}</td><td>${n.kind}</td><td>${esc(String(n.industry||'').split(' ')[0])}</td><td class="${n.direction>0?'up':'dn'}">${n.direction>0?'▲':'▼'}</td><td>${n.severity}</td><td>${n.released?'Released #'+n.released_upd:n.release_t!=null?'Auto @'+mm(n.release_t):'Manual'}</td><td>${n.released?'':`<button class="g" onclick="ev('release',{id:'${n.id}'})">Release</button>`}</td></tr>`).join('')}</table></div></div>`:''}
@@ -333,7 +337,6 @@ function render(){
     if(st=='ended')return resultsView();
     if(st=='trans1'||BRK.includes(st))return interstitial();
     
-    // Intercept Round 2 active stages and delegate to r2.js view if available
     if(R2LIVE.includes(st)){
         if(role=='team' && typeof r2TeamView === 'function') return r2TeamView();
         if(role=='spectator' && typeof r2SpecView === 'function') return r2SpecView();
