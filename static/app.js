@@ -332,6 +332,13 @@ function render(){
     if(role=='organizer')return orgView();
     if(st=='ended')return resultsView();
     if(st=='trans1'||BRK.includes(st))return interstitial();
+    
+    // Intercept Round 2 active stages and delegate to r2.js view if available
+    if(R2LIVE.includes(st)){
+        if(role=='team' && typeof r2TeamView === 'function') return r2TeamView();
+        if(role=='spectator' && typeof r2SpecView === 'function') return r2SpecView();
+    }
+    
     return role=='team'?teamView():specView();
 }
 
